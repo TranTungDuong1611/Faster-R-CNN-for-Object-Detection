@@ -29,8 +29,58 @@ class RegionProposalNetwork(nn.Module):
         # Relu activation
         self.relu = nn.ReLU()
         
+    def assign_targets_to_anchors(self, anchors, gt_boxes):
+        # Get (gt_boxes, num_anchors) IOU matrix
+        iou_matrix = get_iou(gt_boxes, anchors)
+        
+        # For each anchor get the best gt box index
+        best_match_iou, best_match_gt_index = iou_matrix.max(dim=0)
+        
+        best_match_gt_idx_per_threshold = best_match_gt_index.clone()
+        
+        bellow_low_threshold = best_match_iou < 0.3
+        between_threshold = (best_match_iou >= 0.3) & (best_match_iou < 0.7)
+        best_match_gt_index[bellow_low_threshold] = -1
+        best_match_gt_index[between_threshold] = -2
+        
+        # Low qualify anchor boxes
+        best_anchor_iou_for_gt, _ = iou_matrix.max(dim=1)
+        gt_pred_pair_with_highest_iou = torch.where(iou_matrix == best_anchor_iou_for_gt[:, None])
+        
+        # Get all the anchor indexes to update
+        pred_inds_to_update = gt_pred_pair_with_highest_iou[1]
+        best_match_gt_index[pred_inds_to_update] = best_match_gt_idx_per_threshold[pred_inds_to_update]
+        
+        # best match index is either valid or -1 (background) or -2 (to ignore)
+        matched_gt_boxes = gt_boxes[best_match_gt_index.clamp(min=0)]
+        
+        # set all foreground anchor labels as 1
+        labels = best_match_gt_index >= 0
+        labels = labels.to(dtype=torch.float32)
+        
+        # Set all backgound labels as 0
+        backgound_anchors = best_match_gt_index == -1
+        labels[backgound_anchors] = 0.0
+        
+        # Set all to be ignored anchors labels as -1
+        ignored_anchors = best_match_gt_index == -2
+        labels[ignored_anchors] = -1.0
+        
+        # Later for classification we pick labels which have >= 0
+        return labels, matched_gt_boxes
+        
         
     def filter_proposals(self, proposals, cls_scores, image_shape):
+        """function to filter the proposal with cls_score higher than a threshold
+
+        Args:
+            proposals: (num_anchors_or_proposals, num_classes, 4)
+            cls_scores: (-1, 1)
+            image_shape
+
+        Returns:
+            proposals, cls_scores: top k proposals and cls_scores with highest cls_score
+        """
         # Pre NMS Filtering
         cls_scores = cls_scores.reshape(-1)
         cls_scores = torch.sigmoid(cls_scores)
@@ -136,11 +186,18 @@ class RegionProposalNetwork(nn.Module):
         proposals = proposals.reshape(proposals.size(0), 4)
         proposals, scores = self.filter_proposals(proposals, cls_scores.detach(), image.shape)
         
+        rpn_output = {
+            'proposals': proposals,
+            'scores': scores
+        }
         
-        
-        
-# image = torch.rand(3, 100, 100)
-# feat = torch.rand(3, 10, 10)
-
-# rpn = RegionProposalNetwork()
-# rpn.generate_anchors(image, feat)
+        if not self.training or target is None:
+            return rpn_output
+        else:
+            # in training
+            # Assign gt box and label for each anchor
+            labels_for_anchors, matched_gt_boxes_for_anchors = self.assign_targets_to_anchors(anchors, target['bboxes'][0])
+            
+            # Base on gt assignment above, ger regression targets for anchors
+            # matched_gt_boxes_for_anchors -> (Number of anchors in image, 4)
+            # anchor -> (Number of anchor in image, 4)
