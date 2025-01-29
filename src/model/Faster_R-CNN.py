@@ -3,48 +3,10 @@ import torch
 import torch.nn as nn
 import torchvision
 
+from utils.utils import *
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-
-def apply_regression_pred_to_anchor_or_proposals(box_transform_pred, anchors_or_proposals):
-    """_summary_
-
-    Args:
-        box_transform_pred: (num_anchors_or_proposals, num_classes, 4)
-        anchors_or_proposals: (num_anchors_or_proposals, 4)
-
-    Returns:
-        pred_boxes: (num_anchors_or_proposals, num_classes, 4)
-    """
-    
-    box_transform_pred = box_transform_pred.reshape(box_transform_pred.size(0), -1, 4)
-    
-    # Get xc, yc, w, h from x1, y1, x2, y2
-    w = anchors_or_proposals[:, 2] - anchors_or_proposals[:, 0]
-    h = anchors_or_proposals[:, 3] - anchors_or_proposals[:, 1]
-    
-    xc = anchors_or_proposals[:, 0] + 0.5 * w
-    yc = anchors_or_proposals[:, 1] + 0.5 * h
-    
-    # dh -> (num_anchors_or_proposals, num_classes)
-    dx = box_transform_pred[..., 0]
-    dy = box_transform_pred[..., 1]
-    dw = box_transform_pred[..., 2]
-    dh = box_transform_pred[..., 3]
-    
-    # pred_xc -> (num_anchors_or_proposals, num_classes)
-    pred_xc = dx * w[:, None] + xc[:, None]
-    pred_yc = dy * h[:, None] + yc[:, None]
-    pred_w = torch.exp(dw) + w[:, None]
-    pred_h = torch.exp(dh) + h[:, None]
-
-    # convert into xmin, ymin, xmax, ymax
-    pred_box_x1 = pred_xc - 0.5 * pred_w
-    pred_box_y1 = pred_yc - 0.5 * pred_h
-    pred_box_x2 = pred_xc + 0.5 * pred_w
-    pred_box_y2 = pred_yc + 0.5 * pred_h
-    
-    pred_boxes = torch.stack((pred_box_x1, pred_box_y1, pred_box_x2, pred_box_y2), dim=2)
 
 # RPN module
 class RegionProposalNetwork(nn.Module):
@@ -67,12 +29,36 @@ class RegionProposalNetwork(nn.Module):
         # Relu activation
         self.relu = nn.ReLU()
         
+        
+    def filter_proposals(self, proposals, cls_scores, image_shape):
+        # Pre NMS Filtering
+        cls_scores = cls_scores.reshape(-1)
+        cls_scores = torch.sigmoid(cls_scores)
+        _, top_n_idx = cls_scores.topk(10000)
+        cls_scores = cls_scores[top_n_idx]
+        proposals = proposals[top_n_idx]
+        
+        # clamb box to image boundary
+        proposals = clamp_boxes_to_image_boundary(proposals, image_shape)
+        
+        # NMS base on objectives
+        keep_mask = torch.zeros_like(cls_scores, dtype=torch.bool)
+        keep_indices = torch.ops.torchvision.nms(proposals, cls_scores, 0.7)
+        post_nms_keep_indices = keep_indices[cls_scores[keep_indices].sort(descending=True)[1]]
+        
+        # Post NMS topk filtering
+        proposals = proposals[post_nms_keep_indices[:2000]]
+        cls_scores = cls_scores[post_nms_keep_indices[:2000]]
+        
+        return proposals, cls_scores
+        
+        
     def generate_anchors(self, image, feat):
         """ function to generate all the anchor boxs in the image
 
         Args:
-            image ():
-            feat ():
+            image: (B, C, W, H)
+            feat (B, C, W, H):
         
         Return:
             anchor_boxs (list): a list of anchor coordinates coressponds to each location on feature map
@@ -144,7 +130,11 @@ class RegionProposalNetwork(nn.Module):
         regression_bbox = regression_bbox.reshape(-1, 4)
         # regression_bboxes -> (Batch*num_anchor_per_location*H_fea* W_feat, 4)
         
+        # Transform generated anchors according to box_transform_pred
+        proposals = apply_regression_pred_to_anchor_or_proposals(regression_bbox.detach().reshape(-1, 1, 4), anchors)
         
+        proposals = proposals.reshape(proposals.size(0), 4)
+        proposals, scores = self.filter_proposals(proposals, cls_scores.detach(), image.shape)
         
         
         
@@ -154,10 +144,3 @@ class RegionProposalNetwork(nn.Module):
 
 # rpn = RegionProposalNetwork()
 # rpn.generate_anchors(image, feat)
-
-arr1 = torch.tensor([1, 2, 3, 4])
-arr2 = torch.tensor([2, 3, 4, 4])
-arr3 = torch.tensor([1, 2, 3, 4])
-print(arr1.shape)
-stack = torch.stack((arr1[:, None], arr2[:, None], arr3[:, None]), dim=2)
-print(stack.shape)
