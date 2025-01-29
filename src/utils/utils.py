@@ -2,9 +2,34 @@ import torch
 import torch.nn as nn
 import torchvision
 
-def apply_regression_pred_to_anchor_or_proposals(box_transform_pred, anchors_or_proposals):
-    """_summary_
+def get_iou(boxes1, boxes2):
+    """
+    Args:
+        boxes1: (N*4)
+        boxes2: (M*4)
+    Return:
+        IOU matrix of shape (MxN)
+    """
+    
+    # Area of boxes (x2-x1) * (y2-y1)
+    area1 = (boxes1[:, 2] - boxes1[:, 0]) * (boxes1[:, 3] - boxes1[:, 1])
+    area2 = (boxes2[:, 2] - boxes2[:, 0]) * (boxes2[:, 3] - boxes2[:, 1])
+    
+    # Get top left x1, y1
+    x_left = torch.max(boxes1[:, None, 0], boxes2[:, 0])     # (N, M)
+    y_top = torch.max(boxes1[:, None, 1], boxes2[:, 1])     # (N, M)
+    
+    # Get bottom right x2, y2
+    x_right = torch.min(boxes1[:, None, 3], boxes2[:, 3])
+    y_bottom = torch.min(boxes1[:, None, 4], boxes2[:, 4])
+    
+    intersection_area = torch.max(0, x_right - x_left) * torch.min(0, y_bottom - y_top)
+    union = area1[:, None] + area2 - intersection_area
+    
+    return intersection_area / union    # (N, M)
 
+def apply_regression_pred_to_anchor_or_proposals(box_transform_pred, anchors_or_proposals):
+    """
     Args:
         box_transform_pred: (num_anchors_or_proposals, num_classes, 4)
         anchors_or_proposals: (num_anchors_or_proposals, 4)
