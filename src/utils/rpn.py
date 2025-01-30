@@ -2,6 +2,48 @@ import torch
 import torch.nn as nn
 import torchvision
 
+def sample_positive_neagative(labels, positive_count, total_count):
+    positive = torch.where(labels >= 1)[0]
+    negative = torch.where(labels == 0)[0]
+    num_pos = positive_count
+    num_pos = min(positive.numel(), num_pos)
+    num_neg = total_count - num_pos
+    num_neg = min(negative.numel(), num_neg)
+    perm_positive_idxs = torch.randperm(positive.numel(), device=positive.device)[:num_pos]
+    perm_negative_idxs = torch.randperm(negative.numel(), device=negative.device)[:num_neg]
+    
+    pos_idxs = positive[perm_positive_idxs]
+    neg_idxs = negative[perm_negative_idxs]
+    sampled_pos_idx_mask = torch.zeros_like(labels, dtype=torch.bool)
+    sampled_neg_idx_mask = torch.zeros_like(labels, dtype=torch.bool)
+    sampled_pos_idx_mask[pos_idxs] = True
+    sampled_neg_idx_mask[neg_idxs] = True
+    return sampled_neg_idx_mask, sampled_pos_idx_mask
+    
+
+def boxes_to_transformation_targets(gt_boxes, anchors_or_proposals):
+    # Get xc, yc, w, h from x1, y1, x2, y2 for anchors
+    widths = anchors_or_proposals[:, 2] - anchors_or_proposals[:, 0]
+    heights = anchors_or_proposals[:, 3] - anchors_or_proposals[:, 1]
+    xc = anchors_or_proposals[:, 0] + 0.5*widths
+    yc = anchors_or_proposals[:, 1] + 0.5*heights
+    
+    # Get xc, yc, w, h from x1, y1, x2, y2 for gt boxes
+    gt_widths = gt_boxes[:, 2] - gt_boxes[:, 0]
+    gt_heights = gt_boxes[:, 3] - gt_boxes[:, 1]
+    gt_xc = gt_boxes[:, 0] + 0.5*gt_widths
+    gt_yc = gt_boxes[:, 1] + 0.5*gt_heights
+    
+    target_dx = (gt_xc - xc) / widths
+    target_dy = (gt_yc - yc) / heights
+    target_xc = torch.log(gt_widths / widths)
+    target_yc = torch.log(gt_heights / heights)
+    
+    target = torch.stack((target_dx, target_dy, target_xc, target_yc),dim=1)
+    
+    return target
+    
+
 def get_iou(boxes1, boxes2):
     """
     Args:
