@@ -6,7 +6,7 @@ import torch.nn as nn
 import torchvision
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
-from src.utils.utils import *
+from src.utils.rpn import *
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
