@@ -11,7 +11,6 @@ from src.utils.utils import *
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
-# RPN module
 class RegionProposalNetwork(nn.Module):
     def __init__(self, in_channels=512):
         super(RegionProposalNetwork, self).__init__()
@@ -201,6 +200,30 @@ class RegionProposalNetwork(nn.Module):
             # Assign gt box and label for each anchor
             labels_for_anchors, matched_gt_boxes_for_anchors = self.assign_targets_to_anchors(anchors, target['bboxes'][0])
             
-            # Base on gt assignment above, ger regression targets for anchors
+            # Base on gt assignment above, get regression targets for anchors
             # matched_gt_boxes_for_anchors -> (Number of anchors in image, 4)
             # anchor -> (Number of anchor in image, 4)
+            regression_target = boxes_to_transformation_targets(matched_gt_boxes_for_anchors, anchors)
+            
+            # Sample positive and negative anchors for training
+            sampled_neg_idx_mask, sampled_pos_idx_mask = sample_positive_neagative(labels_for_anchors, 128, 256)
+            sampled_idxs = torch.where(sampled_pos_idx_mask | sampled_neg_idx_mask)[0]
+            
+            locaization_loss = (
+                nn.functional.smooth_l1_loss(
+                    regression_bbox[sampled_pos_idx_mask],
+                    regression_target[sampled_pos_idx_mask],
+                    beta=1/9,
+                    reduction='sum'
+                ) / (sampled_idxs.numel())
+            )
+            
+            cls_loss = torch.nn.functional.binary_cross_entropy_with_logits(
+                cls_scores[sampled_idxs].flatten(),
+                labels_for_anchors[sampled_idxs].flatten()
+            )
+            
+            rpn_output['rpn_classification_loss'] = cls_loss
+            rpn_output['rpn_localization_loss'] = locaization_loss
+            
+            return rpn_output
