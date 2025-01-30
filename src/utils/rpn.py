@@ -65,7 +65,7 @@ def get_iou(boxes1, boxes2):
     x_right = torch.min(boxes1[:, None, 3], boxes2[:, 3])
     y_bottom = torch.min(boxes1[:, None, 4], boxes2[:, 4])
     
-    intersection_area = torch.max(0, x_right - x_left) * torch.min(0, y_bottom - y_top)
+    intersection_area = torch.max(0, x_right - x_left) * torch.max(0, y_bottom - y_top)
     union = area1[:, None] + area2 - intersection_area
     
     return intersection_area / union    # (N, M)
